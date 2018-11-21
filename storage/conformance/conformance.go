@@ -2,8 +2,10 @@
 package conformance
 
 import (
+	"fmt"
 	"reflect"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,6 +43,9 @@ func RunTests(t *testing.T, newStorage func() storage.Storage) {
 	runTests(t, newStorage, []subTest{
 		{"AuthCodeCRUD", testAuthCodeCRUD},
 		{"AuthRequestCRUD", testAuthRequestCRUD},
+		// Auth requests are not special here -- we just try to do a 200 of these
+		// concurrently.
+		{"AuthRequestCreationInParallel", testAuthRequestCreationInParallel},
 		{"ClientCRUD", testClientCRUD},
 		{"RefreshTokenCRUD", testRefreshTokenCRUD},
 		{"PasswordCRUD", testPasswordCRUD},
@@ -160,7 +165,55 @@ func testAuthRequestCRUD(t *testing.T, s storage.Storage) {
 	if err := s.DeleteAuthRequest(a2.ID); err != nil {
 		t.Fatalf("failed to delete auth request: %v", err)
 	}
+}
 
+func testAuthRequestCreationInParallel(t *testing.T, s storage.Storage) {
+	const count = 200
+	wg := sync.WaitGroup{}
+	wg.Add(count)
+	errc := make(chan error, count)
+
+	for i := 0; i < count; i++ {
+		go func(j int) {
+			defer wg.Done()
+			a := storage.AuthRequest{
+				ID:                  storage.NewID(),
+				ClientID:            fmt.Sprintf("client%d", j),
+				ResponseTypes:       []string{"code"},
+				Scopes:              []string{"openid", "email"},
+				RedirectURI:         "https://localhost:80/callback",
+				Nonce:               "foo",
+				State:               "bar",
+				ForceApprovalPrompt: true,
+				LoggedIn:            true,
+				Expiry:              neverExpire,
+				ConnectorID:         "ldap",
+				ConnectorData:       []byte(`{"some":"data"}`),
+				Claims: storage.Claims{
+					UserID:        "1",
+					Username:      "jane",
+					Email:         "jane.doe@example.com",
+					EmailVerified: true,
+					Groups:        []string{"a", "b"},
+				},
+			}
+
+			if err := s.CreateAuthRequest(a); err != nil {
+				errc <- err
+			}
+		}(i)
+	}
+
+	wg.Wait()
+L:
+	for {
+		select {
+		case err := <-errc:
+			t.Error(err)
+		default:
+			break L
+		}
+	}
 }
 
 func testAuthCodeCRUD(t *testing.T, s storage.Storage) {
