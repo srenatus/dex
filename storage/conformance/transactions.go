@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -66,7 +67,6 @@ func testAuthRequestConcurrentUpdate(t *testing.T, s storage.Storage) {
 		ForceApprovalPrompt: true,
 		LoggedIn:            true,
 		Expiry:              neverExpire,
-		ConnectorID:         "ldap",
 		ConnectorData:       []byte(`{"some":"data"}`),
 		Claims: storage.Claims{
 			UserID:        "1",
@@ -81,20 +81,27 @@ func testAuthRequestConcurrentUpdate(t *testing.T, s storage.Storage) {
 		t.Fatalf("failed creating auth request: %v", err)
 	}
 
-	var err1, err2 error
+	// try to update the auth request concurrently
+	const max = 20
 
-	err1 = s.UpdateAuthRequest(a.ID, func(old storage.AuthRequest) (storage.AuthRequest, error) {
-		old.State = "state 1"
-		err2 = s.UpdateAuthRequest(a.ID, func(old storage.AuthRequest) (storage.AuthRequest, error) {
-			old.State = "state 2"
-			return old, nil
-		})
-		return old, nil
-	})
-
-	if (err1 == nil) == (err2 == nil) {
-		t.Errorf("update auth request:\nupdate1: %v\nupdate2: %v\n", err1, err2)
+	errc := make(chan error, max)
+	for i := 0; i < max; i++ {
+		go func(i int) {
+			errc <- s.UpdateAuthRequest(a.ID, func(old storage.AuthRequest) (storage.AuthRequest, error) {
+				old.ConnectorID = fmt.Sprintf("conn-%d", i)
+				return old, nil
+			})
+		}(i)
 	}
+
+	for i := 0; i < max; i++ {
+		err := <-errc
+		if err != nil {
+			t.Error(err)
+		}
+	}
+	// Note: errors aren't unexpected here -- this is for illustration purposes
+	// only, not a mergeable improvement to the existing test.
 }
 
 func testPasswordConcurrentUpdate(t *testing.T, s storage.Storage) {
