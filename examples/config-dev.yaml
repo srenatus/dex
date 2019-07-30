@@ -20,6 +20,12 @@ web:
   # tlsCert: /etc/dex/tls.crt
   # tlsKey: /etc/dex/tls.key
 
+frontend:
+  dir: ./web
+  extra:
+    foo: bar
+    baz: 3000
+
 # Configuration for telemetry
 telemetry:
   http: 0.0.0.0:5558
